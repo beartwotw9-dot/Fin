@@ -1,0 +1,14 @@
+{
+  "symbols": [
+    "VT",
+    "VOO",
+    "QQQ",
+    "0050",
+    "006208",
+    "GLD",
+    "SPY"
+  ],
+  "notes": {
+    "SPY": "test"
+  }
+}
