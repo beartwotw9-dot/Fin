@@ -47,6 +47,7 @@ def analyze_portfolio(holdings: list[HoldingInput], cash: float = 0.0) -> dict[s
             "risk_flags": [],
             "suggestions": [],
             "action_plan": [],
+            "budget_plans": [],
             "recommended_products": [],
         }
 
@@ -54,6 +55,7 @@ def analyze_portfolio(holdings: list[HoldingInput], cash: float = 0.0) -> dict[s
     risk_flags = _build_risk_flags(rows, allocation, summary["cash_weight"])
     suggestions = _build_suggestions(rows, allocation, summary["cash_weight"])
     action_plan = _build_action_plan(rows, allocation, summary, cash)
+    budget_plans = _build_budget_plans(rows, allocation, summary, action_plan)
     recommended_products = _build_recommended_products(rows, allocation, summary, action_plan)
 
     rows.sort(key=lambda item: item["market_value"], reverse=True)
@@ -64,6 +66,7 @@ def analyze_portfolio(holdings: list[HoldingInput], cash: float = 0.0) -> dict[s
         "risk_flags": risk_flags,
         "suggestions": suggestions,
         "action_plan": action_plan,
+        "budget_plans": budget_plans,
         "recommended_products": recommended_products,
     }
 
@@ -131,6 +134,7 @@ def backtest_portfolio(
     correlation = _calc_correlation(portfolio_series, benchmark_series)
 
     action_plan = _build_action_plan(rows, allocation, summary, cash)
+    budget_plans = _build_budget_plans(rows, allocation, summary, action_plan)
     backtest_advice = _build_backtest_advice(metrics, benchmark_metrics, alpha_pct, allocation, action_plan)
     future_outlook = _build_future_outlook(portfolio_series, metrics, benchmark_symbol)
     recommended_products = _build_recommended_products(rows, allocation, summary, action_plan, future_outlook)
@@ -163,6 +167,7 @@ def backtest_portfolio(
             for idx, value in drawdown_series.items()
         ],
         "action_plan": action_plan,
+        "budget_plans": budget_plans,
         "advice": backtest_advice,
         "future_outlook": future_outlook,
         "recommended_products": recommended_products,
@@ -359,12 +364,16 @@ def _build_action_plan(
         return plan
 
     portfolio_value = float(summary["portfolio_value"])
+    spendable_cash = max(float(cash), 0.0)
+    forbidden_buys: set[str] = set()
     largest = max(rows, key=lambda item: item["weight_pct"])
     if largest["weight_pct"] > 35 and largest["price"] > 0:
         target_value = portfolio_value * 0.3
         sell_amount = max(largest["market_value"] - target_value, 0.0)
         est_shares = sell_amount / largest["price"] if largest["price"] else 0.0
         if sell_amount > 0:
+            forbidden_buys.add(largest["symbol"])
+            spendable_cash += sell_amount
             plan.append(
                 {
                     "priority": "high",
@@ -372,35 +381,39 @@ def _build_action_plan(
                     "symbol": largest["symbol"],
                     "amount": round(sell_amount, 2),
                     "estimated_shares": round(est_shares, 4),
-                    "reason": f"將單一持股從 {largest['weight_pct']}% 降到接近 30%，降低集中風險。",
+                    "reason": f"{largest['symbol']} 目前佔比 {largest['weight_pct']}%，先分批降到接近 30% 左右，避免單一標的主導整體波動。",
                 }
             )
 
     core_gap_pct = max(TARGETS["core"] - allocation.get("core", 0), 0.0)
-    available_cash = max(cash, portfolio_value * 0.02)
-    if core_gap_pct > 0 and available_cash > 0:
-        preferred_core = "0050" if allocation.get("taiwan", 0) >= allocation.get("us", 0) else "VT"
-        target_amount = min(portfolio_value * (core_gap_pct / 100), available_cash)
+    if core_gap_pct > 0 and spendable_cash > 0:
+        preferred_core = _select_core_symbol(allocation, forbidden_buys)
+        target_amount = min(portfolio_value * (core_gap_pct / 100), spendable_cash * 0.7)
         price = _holding_price(rows, preferred_core)
         est_shares = target_amount / price if price else None
-        plan.append(
-            {
-                "priority": "high" if core_gap_pct > 15 else "medium",
-                "action": "buy",
-                "symbol": preferred_core,
-                "amount": round(target_amount, 2),
-                "estimated_shares": round(est_shares, 4) if est_shares is not None else None,
-                "reason": f"核心配置比目標少 {core_gap_pct:.1f}%，先補核心資產會比加碼衛星標的更穩。",
-            }
-        )
+        if target_amount > 0:
+            spendable_cash -= target_amount
+            plan.append(
+                {
+                    "priority": "high" if core_gap_pct > 15 else "medium",
+                    "action": "buy",
+                    "symbol": preferred_core,
+                    "amount": round(target_amount, 2),
+                    "estimated_shares": round(est_shares, 4) if est_shares is not None else None,
+                    "reason": f"核心配置距離目標仍少 {core_gap_pct:.1f}%，這筆資金優先補到 {preferred_core}，會比繼續加碼題材股更穩。",
+                }
+            )
 
     defensive_gap_pct = max(TARGETS["defensive"] - allocation.get("defensive", 0), 0.0)
-    if defensive_gap_pct > 0 and cash > 0:
+    if defensive_gap_pct > 0 and spendable_cash > 0:
         symbol = "TLT" if allocation.get("us", 0) >= allocation.get("taiwan", 0) else "GLD"
-        target_amount = min(portfolio_value * (defensive_gap_pct / 100), cash * 0.5)
+        if symbol in forbidden_buys:
+            symbol = "GLD" if symbol == "TLT" else "TLT"
+        target_amount = min(portfolio_value * (defensive_gap_pct / 100), spendable_cash)
         price = _holding_price(rows, symbol)
         est_shares = target_amount / price if price else None
         if target_amount > 0:
+            spendable_cash -= target_amount
             plan.append(
                 {
                     "priority": "medium",
@@ -408,12 +421,12 @@ def _build_action_plan(
                     "symbol": symbol,
                     "amount": round(target_amount, 2),
                     "estimated_shares": round(est_shares, 4) if est_shares is not None else None,
-                    "reason": "補一些防禦資產，讓回檔時的淨值波動不要全部靠現金或高 Beta 股票承受。",
+                    "reason": f"補一點 {symbol} 這類防禦資產，讓回檔時不必完全靠現金或高波動持股硬扛。",
                 }
             )
 
     desired_cash = portfolio_value * (TARGETS["cash"] / 100)
-    if cash < desired_cash:
+    if cash < desired_cash and spendable_cash <= 0:
         gap = desired_cash - cash
         plan.append(
             {
@@ -422,7 +435,7 @@ def _build_action_plan(
                 "symbol": None,
                 "amount": round(gap, 2),
                 "estimated_shares": None,
-                "reason": f"現金比目標少約 {gap:.0f}，下次加碼前可先保留這筆彈性資金。",
+                "reason": f"現金緩衝仍比目標少約 {gap:.0f}，下一筆資金先留著，等回檔或再平衡時會更好用。",
             }
         )
 
@@ -439,6 +452,100 @@ def _build_action_plan(
         )
 
     return plan
+
+
+def _select_core_symbol(allocation: dict[str, float], forbidden_buys: set[str] | None = None) -> str:
+    forbidden = forbidden_buys or set()
+    primary = "0050" if allocation.get("taiwan", 0) >= allocation.get("us", 0) else "VT"
+    if primary not in forbidden:
+        return primary
+    fallback = "VT" if primary == "0050" else "0050"
+    if fallback not in forbidden:
+        return fallback
+    return primary
+
+
+def _build_budget_plans(
+    rows: list[dict[str, Any]],
+    allocation: dict[str, float],
+    summary: dict[str, float],
+    action_plan: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    portfolio_value = float(summary.get("portfolio_value", 0.0))
+    if portfolio_value <= 0:
+        return []
+
+    dominant_region = "taiwan" if allocation.get("taiwan", 0) >= allocation.get("us", 0) else "us"
+    primary_core = _select_core_symbol(allocation)
+    global_symbol = "VT" if primary_core != "VT" else "0050"
+    defensive_symbol = "GLD" if dominant_region == "taiwan" else "TLT"
+
+    weights: list[tuple[str, float, str]] = []
+    if allocation.get("core", 0) < 50:
+        weights.append((primary_core, 0.55, "先補核心底倉，讓整體報酬來源更穩。"))
+    else:
+        weights.append((primary_core, 0.4, "維持核心資產為主，避免新增資金太分散。"))
+
+    if dominant_region == "taiwan" and allocation.get("us", 0) < 25:
+        weights.append((global_symbol, 0.3, "補一點全球曝險，降低只押單一市場的風險。"))
+    elif dominant_region == "us" and allocation.get("taiwan", 0) < 15:
+        weights.append((global_symbol, 0.2, "保留一部分台幣核心資產，讓生活幣別與資產更一致。"))
+    else:
+        weights.append((global_symbol, 0.2, "用第二核心標的分散單一 ETF 的集中度。"))
+
+    if allocation.get("defensive", 0) < 8:
+        weights.append((defensive_symbol, 0.15, "補少量防禦資產，讓組合回檔時不要太痛。"))
+
+    if action_plan and action_plan[0].get("action") == "sell":
+        weights.append(("CASH", 0.1, "先留一些現金，等減碼完成後再分批投入更順。"))
+    else:
+        weights.append(("CASH", 0.1, "預留一點現金，之後加碼會比較有彈性。"))
+
+    normalized_total = sum(weight for _, weight, _ in weights)
+    budgets = [10_000, 50_000, 100_000]
+    current_cash = float(summary.get("cash", 0.0))
+    if current_cash >= 5_000:
+        budgets.insert(0, int(round(current_cash, -3)))
+
+    plans: list[dict[str, Any]] = []
+    seen_budgets: set[int] = set()
+    for budget in budgets:
+        if budget in seen_budgets:
+            continue
+        seen_budgets.add(budget)
+        entries: list[dict[str, Any]] = []
+        for symbol, weight, reason in weights:
+            amount = round(budget * (weight / normalized_total), 2)
+            if amount <= 0:
+                continue
+            if symbol == "CASH":
+                entries.append(
+                    {
+                        "symbol": "CASH",
+                        "amount": amount,
+                        "estimated_shares": None,
+                        "reason": reason,
+                    }
+                )
+                continue
+            price = _holding_price(rows, symbol)
+            est_shares = amount / price if price and price > 0 else None
+            entries.append(
+                {
+                    "symbol": symbol,
+                    "amount": amount,
+                    "estimated_shares": round(est_shares, 4) if est_shares is not None else None,
+                    "reason": reason,
+                }
+            )
+        plans.append(
+            {
+                "budget": budget,
+                "summary": f"如果你現在多投入 {budget:,.0f}，建議先照這個順序分批配置。",
+                "items": entries,
+            }
+        )
+    return plans
 
 
 def _holding_price(rows: list[dict[str, Any]], symbol: str) -> float | None:

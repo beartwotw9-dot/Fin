@@ -126,6 +126,16 @@ export type PortfolioAnalysis = {
     estimated_shares: number | null;
     reason: string;
   }>;
+  budget_plans: Array<{
+    budget: number;
+    summary: string;
+    items: Array<{
+      symbol: string;
+      amount: number;
+      estimated_shares: number | null;
+      reason: string;
+    }>;
+  }>;
   recommended_products: Array<{
     symbol: string;
     stance: string;
@@ -165,6 +175,16 @@ export type PortfolioBacktestResult = {
     amount: number;
     estimated_shares: number | null;
     reason: string;
+  }>;
+  budget_plans: Array<{
+    budget: number;
+    summary: string;
+    items: Array<{
+      symbol: string;
+      amount: number;
+      estimated_shares: number | null;
+      reason: string;
+    }>;
   }>;
   advice: Array<{ title: string; detail: string }>;
   future_outlook: {

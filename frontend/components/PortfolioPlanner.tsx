@@ -28,8 +28,12 @@ type Row = {
 };
 
 const defaultRows: Row[] = [
-  { symbol: "VT", shares: "10", avg_cost: "145" },
-  { symbol: "0050", shares: "20", avg_cost: "85" },
+  { symbol: "0050", shares: "387", avg_cost: "76.33" },
+  { symbol: "00931B", shares: "100", avg_cost: "15.12" },
+  { symbol: "1519", shares: "2", avg_cost: "911.5" },
+  { symbol: "QQQ", shares: "0.20654", avg_cost: "629.902198" },
+  { symbol: "VOO", shares: "1.45486", avg_cost: "592.221932" },
+  { symbol: "VT", shares: "2.22789", avg_cost: "143.723433" },
 ];
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -41,7 +45,7 @@ const yearsAgo = (n: number) => {
 
 export default function PortfolioPlanner() {
   const [rows, setRows] = useState<Row[]>(defaultRows);
-  const [cash, setCash] = useState("50000");
+  const [cash, setCash] = useState("0");
   const [benchmark, setBenchmark] = useState("");
   const [startDate, setStartDate] = useState(yearsAgo(3));
   const [endDate, setEndDate] = useState(today());
@@ -222,6 +226,7 @@ export default function PortfolioPlanner() {
                 </Card>
 
                 <ActionPlanCard title="可執行建議" items={analysis.action_plan} />
+                <BudgetPlansCard plans={analysis.budget_plans} />
                 <RecommendationCard items={analysis.recommended_products} />
 
                 <Card>
@@ -338,6 +343,7 @@ export default function PortfolioPlanner() {
                 </Card>
 
                 <ActionPlanCard title="依回測調整的下一步" items={backtest.action_plan} />
+                <BudgetPlansCard plans={backtest.budget_plans} />
 
                 <FutureOutlookCard outlook={backtest.future_outlook} />
                 <RecommendationCard items={backtest.recommended_products} />
@@ -398,17 +404,64 @@ function ActionPlanCard({
               <Badge tone={item.priority === "high" ? "danger" : item.priority === "medium" ? "warning" : "info"}>
                 {item.priority.toUpperCase()}
               </Badge>
-              <div className="font-medium text-text">
-                {ACTION_LABELS[item.action] ?? item.action}
-                {item.symbol ? ` · ${item.symbol}` : ""}
-              </div>
+              <div className="font-medium text-text">{formatActionTitle(item.action, item.symbol)}</div>
             </div>
-            <div className="mt-2 text-sm text-muted">{item.reason}</div>
+            <div className="mt-2 text-sm leading-relaxed text-muted">{item.reason}</div>
             {item.amount > 0 && (
               <div className="mt-2 font-mono text-sm text-text">
-                約 {formatNumber(item.amount)} {item.estimated_shares ? ` / 約 ${formatNumber(item.estimated_shares, 4)} 股` : ""}
+                約 {formatNumber(item.amount)}
+                {item.estimated_shares ? ` / 約 ${formatNumber(item.estimated_shares, 4)} 股` : ""}
               </div>
             )}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function BudgetPlansCard({
+  plans,
+}: {
+  plans: Array<{
+    budget: number;
+    summary: string;
+    items: Array<{
+      symbol: string;
+      amount: number;
+      estimated_shares: number | null;
+      reason: string;
+    }>;
+  }>;
+}) {
+  if (!plans.length) return null;
+
+  return (
+    <Card>
+      <CardHeader><CardTitle>如果你現在想再投入一筆錢</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        {plans.map((plan) => (
+          <div key={plan.budget} className="rounded-lg border border-border bg-surface2 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone="info">預算 {formatNumber(plan.budget)}</Badge>
+              <div className="text-sm text-text">{plan.summary}</div>
+            </div>
+            <div className="mt-3 space-y-2">
+              {plan.items.map((item, index) => (
+                <div key={`${plan.budget}-${item.symbol}-${index}`} className="rounded-md border border-border/70 bg-surface px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="font-medium text-text">
+                      {item.symbol === "CASH" ? "先保留現金" : `優先買進 ${item.symbol}`}
+                    </div>
+                    <div className="font-mono text-sm text-accent">
+                      {formatNumber(item.amount)}
+                      {item.estimated_shares ? ` / 約 ${formatNumber(item.estimated_shares, 4)} 股` : ""}
+                    </div>
+                  </div>
+                  <div className="mt-1 text-sm text-muted">{item.reason}</div>
+                </div>
+              ))}
+            </div>
           </div>
         ))}
       </CardContent>
@@ -422,6 +475,14 @@ const ACTION_LABELS: Record<string, string> = {
   hold_cash: "保留現金",
   hold: "維持配置",
 };
+
+function formatActionTitle(action: string, symbol: string | null) {
+  if (action === "buy") return `下一筆資金優先補 ${symbol}`;
+  if (action === "sell") return `先分批減碼 ${symbol}`;
+  if (action === "hold_cash") return "先保留現金，不急著全數投入";
+  if (action === "hold") return "目前先維持配置";
+  return `${ACTION_LABELS[action] ?? action}${symbol ? ` · ${symbol}` : ""}`;
+}
 
 function FutureOutlookCard({
   outlook,
