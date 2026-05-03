@@ -1,5 +1,3 @@
 {
-  "env": {
-    "NEXT_PUBLIC_API_URL": "https://your-render-url.onrender.com"
-  }
+  "$schema": "https://openapi.vercel.sh/vercel.json"
 }
